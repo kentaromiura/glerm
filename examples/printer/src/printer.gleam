@@ -1,10 +1,10 @@
-import gleam/bit_string
+import gleam/bit_array
 import gleam/erlang/process
 import gleam/function
 import gleam/option.{Some}
+import gleam/otp/actor
 import gleam/string
 import glerm.{Character, Control, Key}
-import gleam/otp/actor
 
 pub fn main() {
   // Create a subject to use as an "exit" signal
@@ -46,7 +46,7 @@ pub fn main() {
           glerm.move_to(0, state)
           // Print the message we got to the screen
           let assert Ok(_) =
-            glerm.print(bit_string.from_string(string.inspect(msg)))
+            glerm.print(bit_array.from_string(string.inspect(msg)))
           // Go down to the next row for the subsequent message
           actor.continue(state + 1)
         }
