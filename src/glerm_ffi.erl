@@ -35,7 +35,9 @@ init() ->
       "win32" ->
         filename:join(Priv, "windows");
       "x86_64-apple-darwin" ++ _ ->
-        filename:join(Priv, "macos")
+        filename:join(Priv, "macos");
+      "aarch64-apple-darwin" ++ _ ->
+        filename:join(Priv, "macos-arm")
     end,
   Path = filename:join(ArchPath, libglerm),
   erlang:load_nif(Path, 0).

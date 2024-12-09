@@ -1,10 +1,11 @@
 import gleam/dynamic.{type Decoder, type Dynamic, DecodeError}
-import gleam/function
-import gleam/option.{type Option, None, Some}
-import gleam/result
 import gleam/erlang/atom
 import gleam/erlang/process.{type Pid, type Selector, type Subject}
+import gleam/function
+import gleam/int
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
+import gleam/result
 
 /// These represent the noted keys being held down when another action is taken,
 /// like pressing another key or mouse button. For certain keys, things like
@@ -61,6 +62,7 @@ pub type Event {
   Focus(event: FocusEvent)
   Key(key: KeyCode, modifier: Option(Modifier))
   Mouse(event: MouseEvent)
+  Mouse2(event: MouseEvent, maybe_params: Option(Int))
   Resize(Int, Int)
   Unknown(tag: String, message: Dynamic)
 }
@@ -105,12 +107,12 @@ fn modifier_decoder() -> Decoder(Option(Modifier)) {
 fn keycode_decoder() -> Decoder(KeyCode) {
   dynamic.any([
     dynamic.tuple2(decode_atom("character", Character), dynamic.string)
-    |> function.compose(fn(maybe_pair) {
-      case maybe_pair {
-        Ok(#(_character, value)) -> Ok(Character(value))
-        Error(err) -> Error(err)
-      }
-    }),
+      |> function.compose(fn(maybe_pair) {
+        case maybe_pair {
+          Ok(#(_character, value)) -> Ok(Character(value))
+          Error(err) -> Error(err)
+        }
+      }),
     decode_atom("enter", Enter),
     decode_atom("backspace", Backspace),
     decode_atom("left", Left),
@@ -136,36 +138,51 @@ fn mouse_event_decoder() -> Decoder(MouseEvent) {
       mouse_button_decoder(),
       modifier_decoder(),
     )
-    |> function.compose(fn(maybe_triple) {
-      case maybe_triple {
-        Ok(#(_mouse_down, button, modifier)) -> Ok(MouseDown(button, modifier))
-        Error(err) -> Error(err)
-      }
-    }),
+      |> function.compose(fn(maybe_triple) {
+        case maybe_triple {
+          Ok(#(_mouse_down, button, modifier)) ->
+            Ok(MouseDown(button, modifier))
+          Error(err) -> Error(err)
+        }
+      }),
     dynamic.tuple3(
       decode_atom("mouse_up", MouseUp),
       mouse_button_decoder(),
       modifier_decoder(),
     )
-    |> function.compose(fn(maybe_triple) {
-      case maybe_triple {
-        Ok(#(_mouse_up, button, modifier)) -> Ok(MouseUp(button, modifier))
-        Error(err) -> Error(err)
-      }
-    }),
+      |> function.compose(fn(maybe_triple) {
+        case maybe_triple {
+          Ok(#(_mouse_up, button, modifier)) -> Ok(MouseUp(button, modifier))
+          Error(err) -> Error(err)
+        }
+      }),
     dynamic.tuple3(
       decode_atom("drag", Drag),
       mouse_button_decoder(),
       modifier_decoder(),
     )
-    |> function.compose(fn(maybe_triple) {
-      case maybe_triple {
-        Ok(#(_drag, button, modifier)) -> Ok(Drag(button, modifier))
-        Error(err) -> Error(err)
-      }
-    }),
+      |> function.compose(fn(maybe_triple) {
+        case maybe_triple {
+          Ok(#(_drag, button, modifier)) -> Ok(Drag(button, modifier))
+          Error(err) -> Error(err)
+        }
+      }),
     decode_atom("moved", Moved),
+    dynamic.tuple2(decode_atom("scroll_down", ScrollDown), modifier_decoder())
+      |> function.compose(fn(maybe_double) {
+        case maybe_double {
+          Ok(#(_mouse_down, _modifier)) -> Ok(ScrollDown)
+          Error(err) -> Error(err)
+        }
+      }),
     decode_atom("scroll_down", ScrollDown),
+    dynamic.tuple2(decode_atom("scroll_up", ScrollUp), modifier_decoder())
+      |> function.compose(fn(maybe_double) {
+        case maybe_double {
+          Ok(#(_mouse_down, _modifier)) -> Ok(ScrollUp)
+          Error(err) -> Error(err)
+        }
+      }),
     decode_atom("scroll_up", ScrollUp),
   ])
 }
@@ -182,31 +199,34 @@ pub fn selector() -> Selector(Event) {
     |> result.map(Focus)
     |> result.unwrap(Unknown("focus", inner))
   })
-  |> process.selecting_record3(atom.create_from_string("key"), fn(first, second) {
-    let key_code = keycode_decoder()(first)
-    let modifier = modifier_decoder()(second)
-    case key_code, modifier {
-      Ok(code), Ok(mod) -> Key(code, mod)
-      _, _ -> Unknown("key", dynamic.from([first, second]))
-    }
-  })
+  |> process.selecting_record3(
+    atom.create_from_string("key"),
+    fn(first, second) {
+      let key_code = keycode_decoder()(first)
+      let modifier = modifier_decoder()(second)
+      case key_code, modifier {
+        Ok(code), Ok(mod) -> Key(code, mod)
+        _, _ -> Unknown("key", dynamic.from([first, second]))
+      }
+    },
+  )
   |> process.selecting_record2(atom.create_from_string("mouse"), fn(inner) {
     inner
     |> mouse_event_decoder()
     |> result.map(Mouse)
     |> result.lazy_unwrap(fn() { Unknown("mouse", inner) })
   })
-  |> process.selecting_record3(atom.create_from_string("resize"), fn(
-    first,
-    second,
-  ) {
-    let columns = dynamic.int(first)
-    let rows = dynamic.int(second)
-    case columns, rows {
-      Ok(col), Ok(rows) -> Resize(col, rows)
-      _, _ -> Unknown("resize", dynamic.from([first, second]))
-    }
-  })
+  |> process.selecting_record3(
+    atom.create_from_string("resize"),
+    fn(first, second) {
+      let columns = dynamic.int(first)
+      let rows = dynamic.int(second)
+      case columns, rows {
+        Ok(col), Ok(rows) -> Resize(col, rows)
+        _, _ -> Unknown("resize", dynamic.from([first, second]))
+      }
+    },
+  )
 }
 
 /// Fully clears the terminal window
@@ -315,7 +335,7 @@ pub fn start_listener_spec(
   actor.start_spec(actor.Spec(
     init: fn() {
       let pid = process.self()
-      let assert #(state, user_selector) = spec.init()
+      let #(state, user_selector) = spec.init()
       let term_selector =
         selector()
         |> process.map_selector(Term)
